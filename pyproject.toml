@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "bug-buster"
+version = "0.1.0"
+description = ""
+authors = ["codejudas <evan.fossier@gmail.com>"]
+readme = "README.md"
+packages = [{include = "src"}]
+
+[tool.poetry.scripts]
+bug-buster-cli = "src.cli:main"
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+llama-index = "^0.12.14"
+pydantic = "^2.10.6"
+llama-index-llms-openai = "^0.3.14"
+colored = "^2.2.5"
+pygithub = "^2.5.0"
+
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.15.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

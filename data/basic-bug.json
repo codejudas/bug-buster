@@ -1,0 +1,7 @@
+{
+  "url": "https://github.com/guardrail-dev/guardrail/issues/1260",
+  "stacktrace": "Error: Error attempting to process modules/sample/src/main/resources/enumerations.yaml:\njava.lang.NullPointerException\nat dev.guardrail.generators.syntax.package$RichString$.splitParts$extension(package.scala:52)\nat dev.guardrail.generators.syntax.package$RichString$.toPascalCase$extension(package.scala:58)\nat dev.guardrail.generators.scala.ScalaGenerator$ScalaInterp$.formatEnumName(ScalaGenerator.scala:78)\nat dev.guardrail.generators.scala.ScalaGenerator$ScalaInterp$.formatEnumName(ScalaGenerator.scala:31)\nat dev.guardrail.generators.ProtocolGenerator$.$anonfun$fromEnum$1(ProtocolGenerator.scala:93)\n...\nat dev.guardrail.generators.ProtocolGenerator$.validProg$1(ProtocolGenerator.scala:91)\nat dev.guardrail.generators.ProtocolGenerator$.$anonfun$fromEnum$36(ProtocolGenerator.scala:144)\n...\nat dev.guardrail.generators.ProtocolGenerator$.$anonfun$fromEnum$35(ProtocolGenerator.scala:144)\nat dev.guardrail.TargetValue.flatMap(Target.scala:101)\nat dev.guardrail.Target$$anon$1.flatMap(Target.scala:36)\nat dev.guardrail.Target$$anon$1.flatMap(Target.scala:27)",
+  "commit": "xxx",
+  "repo": "guardrail-dev/guardrail",
+  "language": "scala"
+}
