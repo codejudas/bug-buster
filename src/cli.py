@@ -3,7 +3,7 @@ import json
 import os
 import asyncio
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from src import logging
 from src.workflows.stacktrace.flow import StacktraceAgentFlow
@@ -55,7 +55,11 @@ async def run(sample: Sample):
 
     workflow = StacktraceAgentFlow(timeout=60, verbose=True)
     res = await workflow.run(sample=sample)
-    log.info(res)
+    if isinstance(res, BaseModel):
+        res = res.model_dump_json(indent=2)
+    if isinstance(res, dict):
+        res = json.dumps(res, default=lambda o: o.model_dump() if isinstance(o, BaseModel) else o)
+    log.info(f'Final result: {res}')
     
     return 0
 

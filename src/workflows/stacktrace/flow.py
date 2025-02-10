@@ -1,5 +1,4 @@
 
-from typing import List
 from llama_index.core.workflow import (
     StartEvent,
     StopEvent,
@@ -10,19 +9,18 @@ from llama_index.core.workflow import (
 from llama_index.llms.openai import (
   OpenAI
 )
-from github import Github, Auth # type: ignore
+from github import Github, Auth, GithubException
 
 from src import logging
 from src.config import Config
 from src.model.sample import Sample
 from src.workflows.common_events import ProgressEvent
 from src.workflows.stacktrace.events import ParsedStackFramesEvent
-from src.workflows.stacktrace.model import RelevantStackFrames
+from src.workflows.stacktrace.model import FileId, RelevantStackFrames, ResolvedFile, SnippetOffset
 
 log = logging.get_logger(__name__)
 
-print(f'GH TOKEN {Config.GITHUB_TOKEN}')
-gh_client = Github(auth=Auth.Token(Config.GITHUB_TOKEN))
+gh_client = Github(auth=Auth.Token(Config.GITHUB_TOKEN or "SET ME"))
 
 
 class StacktraceAgentFlow(Workflow):
@@ -52,7 +50,7 @@ class StacktraceAgentFlow(Workflow):
   llm = OpenAI(model="gpt-4o")
 
   @step
-  async def parse_stacktrace(self, ctx: Context, ev: StartEvent) -> ParsedStackFramesEvent:
+  async def parse_stacktrace(self, ctx: Context, ev: StartEvent) -> ParsedStackFramesEvent | StopEvent:
     s: Sample = ev.sample
 
     # Let user know we have started looking at the stack trace
@@ -77,40 +75,101 @@ class StacktraceAgentFlow(Workflow):
     sllm = self.llm.as_structured_llm(RelevantStackFrames)
     response = await sllm.acomplete(prompt)
     log.info(f"Got response: {response.text}")
-    # files = {}
-    for frame in response.raw.frames:
-      ctx.write_event_to_stream(ProgressEvent(message=f'resolving {frame.path}'))
 
-      # Broadly two types of stack traces
-      # 1. Include the file name + path in the stack, eg: python, JS/TS, ruby.
-      #   - For these the complexity is that the path will have a prefix not in the repo. 
-      #   => To match to repo we could basically list dirs in the root of the repo and find the matching prefix. Probably some edge cases but oh well.
-      # 2. Include a class path and the file name, eg: JVM languages
-      #   - class path kind of maps to the file path, but not exactly since you can have nested classes for instance
-      #   - There is also and extra prefix in the repo, eg : proj/src/java/<... portion that matches the classpath more or less>
-      #   => To match just statically add the prefix.
-
-      log.info(f"Searching for {frame.path} with pattern {file_pattern}")
-      
-      # Store results in files dict
-      # files[frame.path] = results
-      
-    return ParsedStackFramesEvent(frames=response.raw.frames, commit=s.commit, repo=s.repo)
+    return ParsedStackFramesEvent(frames=response.raw.frames, sample=s)
   
   @step
   async def fetch_files(self, ctx: Context, ev: ParsedStackFramesEvent) -> StopEvent:
-    # How to go from stack trace path to path in the repo in a good way? Options:
-    # 1. Get the root dir contents, ask the LLM to pick next step each time... Could be a lot of LLM calls, how do you cache?
-    #   - LLM calls are expensive, so want to avoid asking.. 
-    # 2. Recursively get all the files or alternatively just the directories of the repo, give that to LLM and ask it to pick the path for each frame..
-    #   - The repo might be huge, ie web-ui, probably like 50k files? 100k?.
-    # 3. Use search_code endpoint with symbol: the last thing with some heuristics to try and get the class -> file
+    files: dict[str, ResolvedFile] = {}
+    for idx, frame in enumerate(ev.frames):
+      ctx.write_event_to_stream(ProgressEvent(message=f'resolving {frame.path}:{frame.method}:{frame.lineno}'))
+      log.info(f'Resolving {frame.path} in GitHub', commit=ev.sample.commit, repo=ev.sample.repo)
 
-    unique_files = { f.path for f in ev.frames }
-    for f_path in unique_files:
-      ctx.write_event_to_stream(ProgressEvent(message=f'fetching file'))
-      log.info(f'Fetching {f_path} from GitHub', commit=ev.commit, repo=ev.repo)
-      # gh_repo.get_repo()
+      if frame.path not in files:
+        f = self._resolve_file_in_github(ev.sample.language, ev.sample.repo, ev.sample.commit, frame.path)
+        if not f:
+          log.warning(f'Unable to resolve {frame.path} to a file in Github', frame=frame, repo=ev.sample.repo, commit=ev.sample.commit)
+          continue
+      else:
+        f = files[frame.path]
+      
+      # Add a new snippet_offset mapping
+      # TODO: Should do refining here
+      f.snippet_offsets.append(SnippetOffset(frame_id=idx, start=frame.lineno, end=frame.lineno+1))
+      files[frame.path] = f
+    
+    # Abort if no files, won't be able to continue anyways
+    if not files:
+      return StopEvent(result="Unable to link stack trace to files in Github")
+      
+    return StopEvent(result={
+      'stack': ev.frames,
+      'files': files,
+    })
 
-    return StopEvent(result='done')
+  def _resolve_file_in_github(self, language: str, repo: str, commit: str, path: str) -> ResolvedFile | None:
+    """
+    Attempts to resolve a file in github
+    Note: Consciously trying to avoid calling get_git_tree(..., recursive=True) because this might be a huge result for very large repos.
+
+    How to go from stack trace path to path in the repo in a good way? Options:
+    1. Get the root dir contents, ask the LLM to pick next step each time... Could be a lot of LLM calls, how do you cache?
+      - LLM calls are expensive, so want to avoid asking.. 
+    2. Recursively get all the files or alternatively just the directories of the repo, give that to LLM and ask it to pick the path for each frame..
+      - The repo might be huge, ie web-ui, probably like 50k files? 100k?.
+    3. Use search_code endpoint with symbol: the last thing with some heuristics to try and get the class -> file
+
+    Broadly two types of stack traces
+    1. Include the file name + path in the stack, eg: python, JS/TS, ruby.
+      - For these the complexity is that the path will have a prefix not in the repo. 
+      => To match to repo we could basically list dirs in the root of the repo and find the matching prefix. Probably some edge cases but oh well.
+    2. Include a class path and the file name, eg: JVM languages
+      - class path kind of maps to the file path, but not exactly since you can have nested classes for instance
+      - There is also and extra prefix in the repo, eg : proj/src/java/<... portion that matches the classpath more or less>
+      => To match just statically add the prefix.
+    """
+    log.info(f"Searching for {path} in Github")
+    r = gh_client.get_repo(repo)
+    if language in {"java", "scala", "kotlin"}:
+      # TODO: Need to remove $ and other stuff from (especially) kotlin, scala class paths?
+      file_name = path.split('/')[-1]
+      if 'Test' in file_name:
+        candidate_path = f'src/test/{language}/' + path.lstrip('/')
+      else:
+        candidate_path = f'src/main/{language}/' + path.lstrip('/')
+    else:
+      # Look for the directories in the root dir of the repo
+      t = r.get_git_tree(commit, recursive=False)
+      # Include directories and files because maybe the file we are matching is in the root of the repo
+      dirs = [item.path for item in t.tree]
+      path_parts = path.split('/')
+      i = len(path_parts) - 1
+      while i >= 0:
+        # Found the common suffix of the path with the repo
+        if any((path_parts[i] == d for d in dirs)):
+          break
+
+        i -= 1
+      
+      candidate_path = '/'.join(path_parts[i:])
+    
+    # Now we have a canidate path, lets try fetching the file to ensure that it exists
+    log.info(f'Checking if {candidate_path} is a valid file on Github', repo=repo, commit=commit)
+    c = r.get_commit(commit)
+    try:
+      content = r.get_contents(candidate_path, ref=commit)
+      if isinstance(content, list):
+        content = content[0]
+    except GithubException as ge:
+      # TODO: Handle 404 and try a different candidate path
+      log.error(f'Failed to get file {candidate_path}', ge)
+      return None
+    
+    url = f'https://github.com/{repo}/blob/{c.sha}/{candidate_path}'
+    return ResolvedFile(
+      file_id=FileId(path=candidate_path, repo=repo, commit=commit, url=url, language=language),
+      content=content.decoded_content.decode('utf-8'),
+      snippet_offsets=[],
+      )
+    
 
