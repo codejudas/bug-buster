@@ -1,4 +1,5 @@
 
+import textwrap
 from llama_index.core.workflow import (
     StartEvent,
     StopEvent,
@@ -16,7 +17,7 @@ from src.config import Config
 from src.model.sample import Sample
 from src.workflows.common_events import ProgressEvent
 from src.workflows.stacktrace.events import ParsedStackFramesEvent
-from src.workflows.stacktrace.model import FileId, RelevantStackFrames, ResolvedFile, SnippetOffset
+from src.workflows.stacktrace.model import FileId, FileOffset, RelevantStackFrames, ResolvedFile, SnippetOffset
 
 log = logging.get_logger(__name__)
 
@@ -93,19 +94,33 @@ class StacktraceAgentFlow(Workflow):
       else:
         f = files[frame.path]
       
-      # Add a new snippet_offset mapping
-      # TODO: Should do refining here
-      f.snippet_offsets.append(SnippetOffset(frame_id=idx, start=frame.lineno, end=frame.lineno+1))
+      # Refine and add a new snippet_offset mapping
+      file_off = await self._refine_method(f, frame.method)
+      f.snippet_offsets.append(SnippetOffset(frame_id=idx, start=file_off.start, end=file_off.end))
       files[frame.path] = f
     
     # Abort if no files, won't be able to continue anyways
     if not files:
       return StopEvent(result="Unable to link stack trace to files in Github")
       
-    return StopEvent(result={
-      'stack': ev.frames,
-      'files': files,
-    })
+    return StopEvent(result={'frames':ev.frames, 'files':files})
+  
+  async def _refine_method(self, file: ResolvedFile, method_name: str) -> FileOffset:
+    """
+    Returns the start and end line of the location of the method in the file.
+    """
+    sllm = self.llm.as_structured_llm(FileOffset)
+    response = await sllm.acomplete(textwrap.dedent(f"""
+      Please find the following method `{method_name}` in the provided {file.file_id.language} file. 
+      You should return the start and end line number such that this contains the entire method definition and body, as well as any associated
+      method documentation, annotations, or comments if they are present.
+      Note that start line number should be inclusive, while end line number is exclusive.
+      
+      ```
+      {file.content}
+      ```"""))
+    return response.raw
+
 
   def _resolve_file_in_github(self, language: str, repo: str, commit: str, path: str) -> ResolvedFile | None:
     """
