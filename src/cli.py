@@ -4,8 +4,11 @@ import os
 import asyncio
 
 from pydantic import BaseModel, ValidationError
+from llama_index.core.workflow import StopEvent
 
 from src import logging
+from src.workflows.common_events import ProgressEvent
+from src.workflows.stacktrace.events import ParsedStackFramesEvent
 from src.workflows.stacktrace.flow import StacktraceAgentFlow
 from src.model.sample import Sample
 
@@ -54,12 +57,30 @@ async def run(sample: Sample):
     log.info(f"Sample: {sample}")
 
     workflow = StacktraceAgentFlow(timeout=60, verbose=True)
-    res = await workflow.run(sample=sample)
-    if isinstance(res, BaseModel):
-        res = res.model_dump_json(indent=2)
-    if isinstance(res, dict):
-        res = json.dumps(res, default=lambda o: o.model_dump() if isinstance(o, BaseModel) else o)
-    log.info(f'Final result: {res}')
+    handler = workflow.run(sample=sample)
+    async for ev in handler.stream_events():
+        match ev:
+            case ProgressEvent(message=msg):
+                log.info(f"[Progress]: {msg}")
+            case ParsedStackFramesEvent(frames=f):
+                log.info(f'[Progress]: Done parsing stack frames, relevant frames: \n{"\n".join(f)}')
+            case StopEvent(result=r):
+                methods = ""
+                for f in r['files']:
+                    methods += f'File {f.file_id.path}:\n'
+                    for s in f.snippets:
+                        methods += s + '\n'
+                    methods += '\n'
+
+                log.info(f'[DONE] Relevant method snippets: \n{methods}')
+
+            
+    # res = await workflow.run(sample=sample)
+    # if isinstance(res, BaseModel):
+    #     res = res.model_dump_json(indent=2)
+    # if isinstance(res, dict):
+    #     res = json.dumps(res, default=lambda o: o.model_dump() if isinstance(o, BaseModel) else o)
+    # log.info(f'Final result: {res}')
     
     return 0
 

@@ -34,6 +34,14 @@ class ResolvedFile(BaseModel):
     content: str = Field(description="Entire content of the file")
     snippet_offsets: List[SnippetOffset] = Field(description="Offsets of snippets we care about in this file")
 
+    @property
+    def snippets(self) -> list[str]:
+        return [
+            '\n'.join(self.content.split('\n')[o.start:o.end])
+            for o
+            in self.snippet_offsets
+        ]
+
 class RelevantStackFrames(BaseModel):
    frames: List[StackFrame] = Field(description="list of relevant stack frames.")
 

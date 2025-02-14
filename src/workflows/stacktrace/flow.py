@@ -75,7 +75,6 @@ class StacktraceAgentFlow(Workflow):
 """
     sllm = self.llm.as_structured_llm(RelevantStackFrames)
     response = await sllm.acomplete(prompt)
-    log.info(f"Got response: {response.text}")
 
     return ParsedStackFramesEvent(frames=response.raw.frames, sample=s)
   
@@ -103,7 +102,7 @@ class StacktraceAgentFlow(Workflow):
     if not files:
       return StopEvent(result="Unable to link stack trace to files in Github")
       
-    return StopEvent(result={'frames':ev.frames, 'files':files})
+    return StopEvent(result={'frames':ev.frames, 'files':list(files.values())})
   
   async def _refine_method(self, file: ResolvedFile, method_name: str) -> FileOffset:
     """
