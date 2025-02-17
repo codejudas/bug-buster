@@ -108,6 +108,13 @@ class StacktraceAgentFlow(Workflow):
     """
     Returns the start and end line of the location of the method in the file.
     """
+    total_lines = len(file.lines)
+    digits = len(str(total_lines))
+    content_with_linenos = '\n'.join([
+      f'{str(i + 1).rjust(digits)} {l}'
+      for i, l in enumerate(file.lines)
+    ])
+
     sllm = self.llm.as_structured_llm(FileOffset)
     response = await sllm.acomplete(textwrap.dedent(f"""
       Please find the following method `{method_name}` in the provided {file.file_id.language} file. 
@@ -116,7 +123,7 @@ class StacktraceAgentFlow(Workflow):
       Note that start line number should be inclusive, while end line number is exclusive.
       
       ```
-      {file.content}
+      {content_with_linenos}
       ```"""))
     return response.raw
 

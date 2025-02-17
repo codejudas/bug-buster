@@ -11,6 +11,7 @@ from src.workflows.common_events import ProgressEvent
 from src.workflows.stacktrace.events import ParsedStackFramesEvent
 from src.workflows.stacktrace.flow import StacktraceAgentFlow
 from src.model.sample import Sample
+from src.workflows.stacktrace.model import ResolvedFile, StackFrame
 
 logging.configure_logging()
 log = logging.get_logger(__name__)
@@ -63,16 +64,18 @@ async def run(sample: Sample):
             case ProgressEvent(message=msg):
                 log.info(f"[Progress]: {msg}")
             case ParsedStackFramesEvent(frames=f):
-                log.info(f'[Progress]: Done parsing stack frames, relevant frames: \n{"\n".join(f)}')
+                log.info(f'[Progress]: Done parsing stack frames, relevant frames: \n{"\n".join([str(ff) for ff in f])}')
             case StopEvent(result=r):
-                methods = ""
-                for f in r['files']:
-                    methods += f'File {f.file_id.path}:\n'
-                    for s in f.snippets:
-                        methods += s + '\n'
-                    methods += '\n'
-
-                log.info(f'[DONE] Relevant method snippets: \n{methods}')
+                files: list[ResolvedFile] = r['files']
+                frames: list[StackFrame] = r['frames']
+                log.info("[DONE] Relevant stack frames:")
+                for i, frame in enumerate(frames):
+                    log.info(f"Frame {frame}")
+                    for fi in files:
+                        for off in fi.snippet_offsets:
+                            if off.frame_id == i:
+                                log.info(f'{fi.file_id} L{off.start}-L{off.end}')
+                                log.info('\n'.join(fi.lines[off.start -1:off.end-1]))
 
             
     # res = await workflow.run(sample=sample)

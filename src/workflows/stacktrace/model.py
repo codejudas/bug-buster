@@ -35,6 +35,10 @@ class ResolvedFile(BaseModel):
     snippet_offsets: List[SnippetOffset] = Field(description="Offsets of snippets we care about in this file")
 
     @property
+    def lines(self) -> list[str]:
+        return self.content.splitlines()
+
+    @property
     def snippets(self) -> list[str]:
         return [
             '\n'.join(self.content.split('\n')[o.start:o.end])
